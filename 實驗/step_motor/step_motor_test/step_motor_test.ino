@@ -47,7 +47,7 @@ void loop() {
 
   // 控制馬達轉動
   if (motorRunning) {
-    stepper.setSpeed(500*a); // 設定速度 (正數為順時針)
+    stepper.setSpeed(-500*a); // 設定速度 (正數為順時針)
     stepper.runSpeed();     // 持續以設定速度轉動
   }
 }

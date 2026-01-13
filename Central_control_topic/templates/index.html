@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>AGV 實時監控系統</title>
+    <style>
+        body { font-family: sans-serif; background: #f8f9fa; padding: 20px; }
+        table { width: 100%; border-collapse: collapse; background: white; margin-bottom: 20px; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background: #333; color: white; }
+        .battery-low { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h2>🚗 車輛狀態 (每秒更新)</h2>
+    <table id="vehicle-table">
+        <thead>
+            <tr><th>ID</th><th>座標 (X, Y)</th><th>電量</th><th>狀態</th></tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <h2>📋 任務狀態</h2>
+    <table id="task-table">
+        <thead>
+            <tr><th>車輛 ID</th><th>目標</th><th>狀態</th></tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <script>
+        function updateData() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    // 1. 更新車輛表格
+                    const vBody = document.querySelector('#vehicle-table tbody');
+                    vBody.innerHTML = data.vehicles.map(v => `
+                        <tr>
+                            <td>${v.id}</td>
+                            <td>${v.x.toFixed(1)}, ${v.y.toFixed(1)}</td>
+                            <td class="${v.battery < 20 ? 'battery-low' : ''}">${v.battery}%</td>
+                            <td>${v.status}</td>
+                        </tr>
+                    `).join('');
+
+                    // 2. 更新任務表格
+                    const tBody = document.querySelector('#task-table tbody');
+                    tBody.innerHTML = data.tasks.map(t => `
+                        <tr>
+                            <td>${t.vehicle_id}</td>
+                            <td>${t.target_x}, ${t.target_y}</td>
+                            <td>${t.done === 1 ? '✅ 完成' : '⏳ 執行中'}</td>
+                        </tr>
+                    `).join('');
+                });
+        }
+
+        // 每 500 毫秒 (1秒) 執行一次 updateData
+        setInterval(updateData, 500);
+        
+        // 初始執行一次
+        updateData();
+    </script>
+</body>
+</html>

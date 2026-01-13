@@ -8,8 +8,8 @@
 // === WiFi & Server 設定 ===
 // ===================================
 // **請將此處替換為您的實際設定**
-const char* ssid = "您的WiFi名稱";
-const char* password = "您的WiFi密碼";
+const char* ssid = "cinosba";
+const char* password = "063026366";
 String serverUrl = "http://192.168.1.107:5000/update"; // 您的電腦 IP 和 Flask 伺服器埠號
 
 // ===================================
@@ -47,8 +47,8 @@ long start_right_ticks = 0;
 #define BIN1 27
 #define BIN2 14
 #define PWMB 12
-EncoderPCNT leftEncoder(GPIO_NUM_35, GPIO_NUM_34, PCNT_UNIT_0);
-EncoderPCNT rightEncoder(GPIO_NUM_39, GPIO_NUM_36, PCNT_UNIT_1);
+EncoderPCNT Encoder_A(GPIO_NUM_35, GPIO_NUM_34, PCNT_UNIT_0);
+EncoderPCNT Encoder_B(GPIO_NUM_39, GPIO_NUM_36, PCNT_UNIT_1);
 
 // ===================================
 // === 馬達控制函式 (保持不變) ===
@@ -57,27 +57,32 @@ EncoderPCNT rightEncoder(GPIO_NUM_39, GPIO_NUM_36, PCNT_UNIT_1);
 void motorStop() {
   digitalWrite(AIN1, LOW); digitalWrite(AIN2, LOW);
   digitalWrite(BIN1, LOW); digitalWrite(BIN2, LOW);
-  ledcWrite(0, 0); ledcWrite(1, 0);
+  analogWrite(PWMA, 0); analogWrite(PWMB, 0);
+  // ledcWrite(0, 0); ledcWrite(1, 0);
 }
 void motorForward(int speed) {
   digitalWrite(AIN1, HIGH); digitalWrite(AIN2, LOW);
   digitalWrite(BIN1, HIGH); digitalWrite(BIN2, LOW);
-  ledcWrite(0, speed); ledcWrite(1, speed);
+  analogWrite(PWMA, speed*100); analogWrite(PWMB, speed*100);
+  // ledcWrite(0, speed); ledcWrite(1, speed);
 }
 void motorBackward(int speed) {
   digitalWrite(AIN1, LOW); digitalWrite(AIN2, HIGH);
   digitalWrite(BIN1, LOW); digitalWrite(BIN2, HIGH);
-  ledcWrite(0, speed); ledcWrite(1, speed);
+  analogWrite(PWMA, speed*100); analogWrite(PWMB, speed*100);
+  // ledcWrite(0, speed); ledcWrite(1, speed);
 }
 void turnLeft(int speed) {
   digitalWrite(AIN1, LOW); digitalWrite(AIN2, HIGH);
   digitalWrite(BIN1, HIGH); digitalWrite(BIN2, LOW);
-  ledcWrite(0, speed); ledcWrite(1, speed);
+  analogWrite(PWMA, speed*100); analogWrite(PWMB, speed*100);
+  // ledcWrite(0, speed); ledcWrite(1, speed);
 }
 void turnRight(int speed) {
   digitalWrite(AIN1, HIGH); digitalWrite(AIN2, LOW);
   digitalWrite(BIN1, LOW); digitalWrite(BIN2, HIGH);
-  ledcWrite(0, speed); ledcWrite(1, speed);
+  analogWrite(PWMA, speed*100); analogWrite(PWMB, speed*100);
+  // ledcWrite(0, speed); ledcWrite(1, speed);
 }
 
 
@@ -105,8 +110,8 @@ bool executeMove() {
   // *** 注意：這裡只考慮移動一個座標單位的精準度 ***
   
   // 3. 檢查編碼器距離
-  long current_left_ticks = abs(leftEncoder.get_count() - start_left_ticks);
-  long current_right_ticks = abs(rightEncoder.get_count() - start_right_ticks);
+  long current_left_ticks = abs(Encoder_A.get_count() - start_left_ticks);
+  long current_right_ticks = abs(Encoder_B.get_count() - start_right_ticks);
   
   // 判斷是否達到預設步進距離
   if (current_left_ticks >= TICKS_PER_STEP && current_right_ticks >= TICKS_PER_STEP) {
@@ -183,8 +188,8 @@ void updatePositionAndGetTarget() {
             isMoving = true; // 啟動移動任務
             
             // 記錄開始移動時的編碼器值，準備計數距離
-            start_left_ticks = leftEncoder.get_count();
-            start_right_ticks = rightEncoder.get_count();
+            start_left_ticks = Encoder_A.get_count();
+            start_right_ticks = Encoder_B.get_count();
 
             Serial.printf("🎯 收到新目標，啟動移動: (%d, %d)\n", target_x, target_y);
         } else {
@@ -212,12 +217,12 @@ void setup() {
   pinMode(STBY, OUTPUT); digitalWrite(STBY, 1);
 
   // PWM 通道設定
-  ledcAttachPin(PWMA, 0); ledcAttachPin(PWMB, 1);
-  ledcSetup(0, 1000, 8); ledcSetup(1, 1000, 8); 
+  // ledcAttachPin(PWMA, 0); ledcAttachPin(PWMB, 1);
+  // ledcSetup(0, 1000, 8); ledcSetup(1, 1000, 8); 
 
   // 編碼器設定
-  leftEncoder.begin(); rightEncoder.begin();
-  leftEncoder.resetEncoder(); rightEncoder.resetEncoder();
+  Encoder_A.begin(); Encoder_B.begin();
+  Encoder_A.resetEncoder(); Encoder_B.resetEncoder();
 
   // WiFi 連線 (省略連線細節)
   WiFi.begin(ssid, password);
@@ -262,8 +267,8 @@ void loop() {
   }
 
   // 3. 顯示編碼器計數
-  long leftCount = leftEncoder.get_count();
-  long rightCount = rightEncoder.get_count();
+  long leftCount = Encoder_A.get_count();
+  long rightCount = Encoder_B.get_count();
   Serial.printf("狀態 | 移動中:%s | 左:%ld | 右:%ld | 位置:(%d,%d) | 目標:(%d,%d)\n",
                 isMoving ? "是" : "否", leftCount, rightCount, x, y, target_x, target_y);
   delay(100); 

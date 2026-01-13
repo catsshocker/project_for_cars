@@ -14,8 +14,8 @@
 #define PWMB 12
 
 // === 編碼器腳位設定 ===
-EncoderPCNT leftEncoder(GPIO_NUM_35, GPIO_NUM_34, PCNT_UNIT_0);
-EncoderPCNT rightEncoder(GPIO_NUM_39, GPIO_NUM_36, PCNT_UNIT_1);
+EncoderPCNT Encoder_A(GPIO_NUM_35, GPIO_NUM_34, PCNT_UNIT_0);
+EncoderPCNT Encoder_B(GPIO_NUM_39, GPIO_NUM_36, PCNT_UNIT_1);
 
 // === 馬達控制函式 ===
 void motorStop() {
@@ -82,10 +82,10 @@ void setup() {
   ledcSetup(0, 1000, 8); // 1kHz, 8位元解析度
   ledcSetup(1, 1000, 8);
 
-  leftEncoder.begin();
-  rightEncoder.begin();
-  leftEncoder.resetEncoder();
-  rightEncoder.resetEncoder();
+  Encoder_A.begin();
+  Encoder_B.begin();
+  Encoder_A.resetEncoder();
+  Encoder_B.resetEncoder();
 
   Serial.println("🏁 TB6612FNG 自走車控制：w=前進 s=後退 a=左轉 d=右轉 r=停止");
   motorStop();
@@ -121,8 +121,8 @@ void loop() {
   }
 
   // 顯示編碼器計數
-  long leftCount = leftEncoder.get_count();
-  long rightCount = rightEncoder.get_count();
+  long leftCount = Encoder_A.get_count();
+  long rightCount = Encoder_B.get_count();
   Serial.printf("左:%ld | 右:%ld\n", leftCount, rightCount);
 
   delay(200);
