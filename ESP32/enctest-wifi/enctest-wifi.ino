@@ -1,32 +1,15 @@
-#include "EncoderPCNT.h"
-#include <Arduino.h>
-#include "PIDController.h"
 #include <WiFi.h>
+#include <WebServer.h>
+#include <HTTPClient.h>
+#include "EncoderPCNT.h"
+#include "PIDController.h"
 
-// =====================
-// WiFi & Server 設定
-// =====================
-const char* ssid = "莊家凱的iPhone";
+// --- WiFi 設定 ---
+const char* ssid = "Jason_iPhone";
 const char* password = "Jason3240904";
-const char* server_ip = "172.20.10.7";
-const char* car_id = "car1";
+const String server_ip = "172.20.10.7";
 
-// =====================
-// 車輛狀態
-// =====================
-volatile int x = 0, y = 0;
-volatile int target_x = 0, target_y = 0;
-volatile bool isMoving = false;
-volatile int SpeedA = 0, SpeedB = 0;
-volatile int moveState = 0;  // 0=停止, 1=旋轉, 2=前進
-
-unsigned long stateStartTime = 0;
-long moveStartEncoderA = 0, moveStartEncoderB = 0;
-#define TICKS_PER_UNIT 500   // 每一格距離對應的 Encoder 數
-
-// =====================
-// 腳位定義
-// =====================
+// --- 腳位與參數 ---
 #define STBY 26
 #define AIN1 25
 #define AIN2 33
@@ -35,171 +18,132 @@ long moveStartEncoderA = 0, moveStartEncoderB = 0;
 #define BIN2 14
 #define PWMB 12
 
+// 你的物理比例參數
+#define FRONT_RADIO 8.5
+#define ANGLE_RADIO (248.0/360.0)
+
+// 全域變數
+int SpeedA = 0;
+int SpeedB = 0;
+float curX = 0, curY = 0, tarX_g = 0, tarY_g = 0;
+bool needToReport = false;
+
 EncoderPCNT Encoder_A(GPIO_NUM_39, GPIO_NUM_36, PCNT_UNIT_0);
 EncoderPCNT Encoder_B(GPIO_NUM_35, GPIO_NUM_34, PCNT_UNIT_1);
+WebServer server(80);
 
-// =====================
-// 馬達控制
-// =====================
+// --- 你的梯形規劃類別 (MotionState, TrapezoidalProfile) 保持不變 ---
+struct MotionState { double pos; double vel; };
+class TrapezoidalProfile {
+    // ... (這裡請貼上你原本的 TrapezoidalProfile 完整內容) ...
+};
+
+// --- 馬達底層控制 ---
 void setmotorSpeed(int inSpeedA, int inSpeedB) {
-  if(inSpeedA < 0) {
-    digitalWrite(AIN1, LOW); digitalWrite(AIN2, HIGH);
-    inSpeedA = -inSpeedA;
-  } else {
-    digitalWrite(AIN1, HIGH); digitalWrite(AIN2, LOW);
-  }
+    // 這裡加入 minPWM 防死區邏輯
+    int minPWM = 80; 
+    if (inSpeedA != 0 && abs(inSpeedA) < minPWM) inSpeedA = (inSpeedA > 0) ? minPWM : -minPWM;
+    if (inSpeedB != 0 && abs(inSpeedB) < minPWM) inSpeedB = (inSpeedB > 0) ? minPWM : -minPWM;
 
-  if(inSpeedB < 0) {
-    digitalWrite(BIN1, LOW); digitalWrite(BIN2, HIGH);
-    inSpeedB = -inSpeedB;
-  } else {
-    digitalWrite(BIN1, HIGH); digitalWrite(BIN2, LOW);
-  }
-
-  analogWrite(PWMA, constrain(inSpeedA, 0, 255));
-  analogWrite(PWMB, constrain(inSpeedB, 0, 255));
+    digitalWrite(AIN1, inSpeedA >= 0); digitalWrite(AIN2, inSpeedA < 0);
+    digitalWrite(BIN1, inSpeedB >= 0); digitalWrite(BIN2, inSpeedB < 0);
+    analogWrite(PWMA, constrain(abs(inSpeedA), 0, 255));
+    analogWrite(PWMB, constrain(abs(inSpeedB), 0, 255));
 }
 
-// =====================
-// 馬達 PID 任務
-// =====================
-void motor_control_loop(void* parameter) {
-  PIDController pidA(7, 0, 0.005);
-  PIDController pidB(7, 0, 0.005);
-
-  long lastTime = millis();
-  double targetEncA = 0, targetEncB = 0;
-
-  while(true) {
-    long now = millis();
-    double dt = (now - lastTime) / 1000.0;
-    lastTime = now;
-    if(dt <= 0) dt = 0.02;
-
-    if(SpeedA == 0 && SpeedB == 0) {
-      targetEncA = Encoder_A.get_count();
-      targetEncB = Encoder_B.get_count();
-    }
-
-    targetEncA += SpeedA * dt * 6.0;
-    targetEncB += SpeedB * dt * 6.0;
-
-    int controlA = pidA.compute(targetEncA, Encoder_A.get_count(), 255, -255, dt);
-    int controlB = pidB.compute(targetEncB, Encoder_B.get_count(), 255, -255, dt);
-
-    setmotorSpeed(controlA, controlB);
-    vTaskDelay(20 / portTICK_PERIOD_MS);
-  }
+// --- 導航回報機制 ---
+void askNext() {
+    HTTPClient http;
+    http.setTimeout(5000);
+    String url = "http://" + server_ip + ":5000/update?id=car1&x=" + String(curX) + "&y=" + String(curY);
+    http.begin(url);
+    if (http.GET() > 0) Serial.println(">>> 導航回報成功");
+    http.end();
 }
 
-// =====================
-// 通訊 & 狀態任務
-// =====================
-void speed_listen_task(void* parameter) {
-  while(true) {
-    // 1️⃣ 從伺服器取得下一步目標
-    if(WiFi.status() == WL_CONNECTED && !isMoving) {
-      WiFiClient client;
-      if(client.connect(server_ip, 5000)) {
-        String url = "/update?id=" + String(car_id) +
-                     "&x=" + String(x) +
-                     "&y=" + String(y);
-        client.print(String("GET ") + url +
-                     " HTTP/1.1\r\nHost: " + server_ip +
-                     "\r\nConnection: close\r\n\r\n");
+// --- 結合梯形規劃的移動邏輯 ---
+void handleMove() {
+    tarX_g = server.arg("x").toFloat();
+    tarY_g = server.arg("y").toFloat();
+    
+    float dx = (tarX_g - curX) * 20.0; // 假設一格 20 cm
+    float dy = (tarY_g - curY) * 20.0;
+    float d = sqrt(dx*dx + dy*dy);
+    float ang = atan2(dy, dx) * 180.0 / PI;
 
-        unsigned long timeout = millis();
-        while(!client.available() && millis() - timeout < 2000);
+    // 先回覆 Flask，然後開始執行移動（避免 Flask 等太久逾時）
+    server.send(200, "text/plain", "Moving");
 
-        String response = "";
-        while(client.available()) {
-          response += (char)client.read();
-        }
-        client.stop();
-
-        response.trim();  // 去掉前後空白與換行
-
-        int comma1 = response.indexOf(',');
-        int comma2 = response.indexOf(',', comma1 + 1);
-
-        if(comma1 > 0 && comma2 > comma1) {
-          int nextX = response.substring(0, comma1).toInt();
-          int nextY = response.substring(comma1 + 1, comma2).toInt();
-
-          Serial.printf("[PARSED DATA] %d,%d\n", nextX, nextY);
-
-          if(nextX != x || nextY != y) {
-            target_x = nextX;
-            target_y = nextY;
-            isMoving = true;
-            moveState = 1;
-            stateStartTime = millis();
-            Serial.printf("[NEW TARGET] (%d, %d)\n", target_x, target_y);
-          }
-        } else {
-          Serial.printf("[PARSE ERROR] format error: '%s'\n", response.c_str());
-        }
-      } else {
-        Serial.println("[ERROR] Server offline");
-      }
+    // 1. 執行旋轉
+    TrapezoidalProfile t_prof(abs(ang) * ANGLE_RADIO, 180, 150, 0.02);
+    while (!t_prof.isFinished()) {
+        MotionState s = t_prof.update();
+        SpeedA = (int)s.vel * (ang > 0 ? 1 : -1);
+        SpeedB = (int)s.vel * (ang > 0 ? 1 : -1); // 旋轉時同向（原地自旋）
+        vTaskDelay(20 / portTICK_PERIOD_MS);
     }
 
-    // 2️⃣ 執行移動狀態機
-    if(isMoving) {
-      if(moveState == 1) {  // 旋轉
-        SpeedA = 80;
-        SpeedB = 80;
-        if(millis() - stateStartTime > 800) {
-          moveState = 2;
-          moveStartEncoderA = Encoder_A.get_count();
-          moveStartEncoderB = Encoder_B.get_count();
-          Serial.println("[MOVE] Rotate Done -> Forward");
-        }
-      } else if(moveState == 2) {  // 前進
-        SpeedA = 150;
-        SpeedB = -150;
-
-        long deltaA = abs(Encoder_A.get_count() - moveStartEncoderA);
-        long deltaB = abs(Encoder_B.get_count() - moveStartEncoderB);
-
-        if(deltaA >= TICKS_PER_UNIT || deltaB >= TICKS_PER_UNIT) {
-          SpeedA = 0;
-          SpeedB = 0;
-          moveState = 0;
-          isMoving = false;
-          x = target_x;
-          y = target_y;
-          Serial.printf("[ARRIVED] (%d, %d)\n", x, y);
-        }
-      }
+    // 2. 執行前進
+    TrapezoidalProfile f_prof(d * FRONT_RADIO, 200, 150, 0.02);
+    while (!f_prof.isFinished()) {
+        MotionState s = f_prof.update();
+        SpeedA = (int)s.vel;
+        SpeedB = -(int)s.vel; // 前進時反向
+        vTaskDelay(20 / portTICK_PERIOD_MS);
     }
 
-    vTaskDelay(50 / portTICK_PERIOD_MS);
-  }
+    SpeedA = 0; SpeedB = 0;
+    curX = tarX_g; curY = tarY_g;
+    needToReport = true; // 標記需要回報
 }
 
-// =====================
-// 初始化
-// =====================
+// --- PID 任務 (Core 1) ---
+void motor_control_loop(void* p) {
+    PIDController pidA(7, 0, 0.005);
+    PIDController pidB(7, 0, 0.005);
+    long lastTime = millis();
+    int targetA = Encoder_A.get_count();
+    int targetB = Encoder_B.get_count();
+
+    while (true) {
+        long now = millis();
+        double dt = (now - lastTime) / 1000.0;
+        lastTime = now;
+
+        targetA += SpeedA * dt * 6;
+        targetB += SpeedB * dt * 6;
+
+        int ctrlA = pidA.compute(targetA, Encoder_A.get_count(), 255, -255, dt);
+        int ctrlB = pidB.compute(targetB, Encoder_B.get_count(), 255, -255, dt);
+        
+        setmotorSpeed(ctrlA, ctrlB);
+        vTaskDelay(20 / portTICK_PERIOD_MS);
+    }
+}
+
 void setup() {
-  Serial.begin(115200);
+    Serial.begin(115200);
+    pinMode(STBY, OUTPUT); digitalWrite(STBY, 1);
+    pinMode(AIN1, OUTPUT); pinMode(AIN2, OUTPUT);
+    pinMode(BIN1, OUTPUT); pinMode(BIN2, OUTPUT);
+    
+    Encoder_A.begin(); Encoder_B.begin();
+    
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+    Serial.println("\nWiFi Connected. IP: " + WiFi.localIP().toString());
 
-  pinMode(STBY, OUTPUT); digitalWrite(STBY, 1);
-  pinMode(AIN1, OUTPUT); pinMode(AIN2, OUTPUT);
-  pinMode(BIN1, OUTPUT); pinMode(BIN2, OUTPUT);
+    server.on("/move", handleMove);
+    server.begin();
 
-  Encoder_A.begin();
-  Encoder_B.begin();
-
-  WiFi.begin(ssid, password);
-  while(WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nWiFi Connected");
-
-  xTaskCreatePinnedToCore(motor_control_loop, "motor", 4096, NULL, 1, NULL, 1);
-  xTaskCreatePinnedToCore(speed_listen_task, "listen", 4096, NULL, 1, NULL, 1);
+    xTaskCreatePinnedToCore(motor_control_loop, "motor", 4096, NULL, 1, NULL, 1);
 }
 
-void loop() {}
+void loop() {
+    server.handleClient();
+    if (needToReport) {
+        askNext();
+        needToReport = false;
+    }
+    yield();
+}
